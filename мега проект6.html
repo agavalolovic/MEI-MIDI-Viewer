@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MEI Viewer with MIDI</title>
+    <script src="https://www.verovio.org/javascript/latest/verovio-toolkit.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        h1 {
+            text-align: center;
+        }
+        #output {
+            width: 80%;
+            margin: auto;
+            border: 1px solid black;
+        }
+        #messages {
+            margin-top: 20px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            max-height: 200px;
+            overflow-y: scroll;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+        .notehead.green {
+            fill: green !important;
+        }
+    </style>
+</head>
+<body>
+    <h1>MEI Viewer with MIDI</h1>
+    <input type="file" id="fileInput">
+    <div id="output"></div>
+    <h2>MIDI Messages</h2>
+    <div id="messages"></div>
+
+    <script>
+        let vrvToolkit;
+        let trebleNotes = [];
+        let bassNotes = [];
+        let currentTrebleNoteIndex = 0;
+        let currentBassNoteIndex = 0;
+
+        // Обработка загрузки MEI файла
+        document.getElementById('fileInput').addEventListener('change', function(event) {
+            const file = event.target.files[0];
+            const reader = new FileReader();
+
+            reader.onload = function(e) {
+                const meiData = e.target.result;
+                vrvToolkit = new verovio.toolkit();
+                vrvToolkit.loadData(meiData);
+                const svg = vrvToolkit.renderToSVG(1, {});
+                document.getElementById('output').innerHTML = svg;
+                console.log("MEI файл загружен и отображен.");
+
+                // Сохранить все ноты из MEI
+                const parsedNotes = parseMEINotes(meiData);
+                trebleNotes = parsedNotes.trebleNotes;
+                bassNotes = parsedNotes.bassNotes;
+                currentTrebleNoteIndex = 0; // Сбросить индекс текущей ноты для скрипичного ключа
+                currentBassNoteIndex = 0; // Сбросить индекс текущей ноты для басового ключа
+            };
+
+            reader.readAsText(file);
+        });
+
+        // Функция для извлечения нот из MEI файла
+        function parseMEINotes(meiData) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(meiData, "application/xml");
+            const trebleNotes = [];
+            const bassNotes = [];
+            
+            const notes = Array.from(xmlDoc.querySelectorAll('note'));
+            notes.forEach(note => {
+                const staff = note.closest('staff');
+                if (staff.getAttribute('n') === '1') {
+                    trebleNotes.push({
+                        pname: note.getAttribute('pname'),
+                        oct: parseInt(note.getAttribute('oct')),
+                        xmlId: note.getAttribute('xml:id')
+                    });
+                } else if (staff.getAttribute('n') === '2') {
+                    bassNotes.push({
+                        pname: note.getAttribute('pname'),
+                        oct: parseInt(note.getAttribute('oct')),
+                        xmlId: note.getAttribute('xml:id')
+                    });
+                }
+            });
+
+            return { trebleNotes, bassNotes };
+        }
+
+        // Обработка MIDI сообщений
+        function onMIDIMessage(event) {
+            const [command, note, velocity] = event.data;
+            const noteName = midiToNoteName(note);
+            const message = `Command: ${command}, Note: ${note} (${noteName}), Velocity: ${velocity}`;
+            console.log("MIDI сообщение получено:", message); // Отладочное сообщение
+            displayMessage(message);
+
+            if (command === 144 && velocity > 0) { // Note on
+                highlightNoteFromMIDI(note);
+            }
+        }
+
+        // Преобразование MIDI номера в имя ноты
+        function midiToNoteName(midi) {
+            const noteNames = ['c', 'c#', 'd', 'd#', 'e', 'f', 'f#', 'g', 'g#', 'a', 'a#', 'b'];
+            const octave = Math.floor(midi / 12) - 1;
+            const note = noteNames[midi % 12];
+            return `${note}${octave}`;
+        }
+
+        // Отображение MIDI сообщений на экране
+        function displayMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
+            messageDiv.textContent = message;
+            messagesDiv.appendChild(messageDiv);
+
+            // Прокрутка вниз
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        // Подсветка ноты в партитуре по MIDI ноте
+        function highlightNoteFromMIDI(midiNote) {
+            if (currentTrebleNoteIndex < trebleNotes.length) {
+                const note = trebleNotes[currentTrebleNoteIndex];
+                const calculatedMIDINote = (note.oct + 1) * 12 + pnameToMidi(note.pname);
+
+                if (calculatedMIDINote === midiNote) {
+                    console.log(`Correct treble note: ${note.pname}${note.oct} with XML ID ${note.xmlId}`);
+                    const noteElement = document.querySelector(`[id="${note.xmlId}"]`);
+                    if (noteElement) {
+                        const noteheads = noteElement.querySelectorAll('.notehead');
+                        noteheads.forEach(notehead => {
+                            notehead.classList.add('green');
+                        });
+                        console.log(`Highlighted treble note: ${note.pname}${note.oct}`);
+                        currentTrebleNoteIndex++; // Перейти к следующей ноте скрипичного ключа
+                        return; // Нота найдена и подсвечена, выйти из функции
+                    } else {
+                        console.log(`Treble note element not found for XML ID ${note.xmlId}`);
+                    }
+                }
+            }
+
+            if (currentBassNoteIndex < bassNotes.length) {
+                const note = bassNotes[currentBassNoteIndex];
+                const calculatedMIDINote = (note.oct + 1) * 12 + pnameToMidi(note.pname);
+
+                if (calculatedMIDINote === midiNote) {
+                    console.log(`Correct bass note: ${note.pname}${note.oct} with XML ID ${note.xmlId}`);
+                    const noteElement = document.querySelector(`[id="${note.xmlId}"]`);
+                    if (noteElement) {
+                        const noteheads = noteElement.querySelectorAll('.notehead');
+                        noteheads.forEach(notehead => {
+                            notehead.classList.add('green');
+                        });
+                        console.log(`Highlighted bass note: ${note.pname}${note.oct}`);
+                        currentBassNoteIndex++; // Перейти к следующей ноте басового ключа
+                    } else {
+                        console.log(`Bass note element not found for XML ID ${note.xmlId}`);
+                    }
+                } else {
+                    console.log(`Неправильная нота: ${note.pname}${note.oct} (ожидаемая) vs ${midiToNoteName(midiNote)} (сыгранная)`);
+                }
+            }
+        }
+
+        // Преобразование имени ноты в MIDI номер
+        function pnameToMidi(pname) {
+            const pnames = { 'c': 0, 'd': 2, 'e': 4, 'f': 5, 'g': 7, 'a': 9, 'b': 11 };
+            return pnames[pname.toLowerCase()];
+        }
+
+        // Успешное подключение к MIDI устройствам
+        function onMIDISuccess(midiAccess) {
+            for (let input of midiAccess.inputs.values()) {
+                input.onmidimessage = onMIDIMessage;
+            }
+            console.log("MIDI устройства подключены успешно."); // Отладочное сообщение
+        }
+
+        // Ошибка подключения к MIDI устройствам
+        function onMIDIFailure() {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
+            messageDiv.textContent = 'Could not access your MIDI devices.';
+            messagesDiv.appendChild(messageDiv);
+            console.error("Не удалось получить доступ к MIDI устройствам."); // Отладочное сообщение
+        }
+
+        // Запрос доступа к MIDI устройствам
+        if (navigator.requestMIDIAccess) {
+            navigator.requestMIDIAccess().then(onMIDISuccess, onMIDIFailure);
+        } else {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message';
+            messageDiv.textContent = 'Web MIDI API is not supported in this browser.';
+            messagesDiv.appendChild(messageDiv);
+            console.error("Web MIDI API не поддерживается в этом браузере."); // Отладочное сообщение
+        }
+    </script>
+</body>
+</html>
